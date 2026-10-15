@@ -378,6 +378,53 @@ The URLs are built from the request's base URL. Behind a load balancer or revers
      -d client_id=llm_dcrc_lq411b6QkPmfxjW...
    ```
 
+### Redeem an identity assertion (RFC 7523)
+
+An agent that already holds an ID-JAG (Identity Assertion Authorization Grant, the cross app access profile) from your identity provider can trade it for the same proxy credential without a browser. The identity provider mints the assertion for the agent's `client_id` with the gateway's authorization server as the audience, and the agent posts it to the token endpoint with the `jwt-bearer` grant. The gateway advertises the grant in `grant_types_supported` only when JWT auth is on, a database and an enterprise license are configured, and at least one requesting app is allowlisted.
+
+Allowlist the requesting apps next to the JWT auth issuer that signs the assertions. An app with a `client_secret` is a confidential client and must send it, either as HTTP Basic or as the `client_secret` form field. An app without one is a public client identified by its `client_id` alone.
+
+```yaml title="config.yaml" showLineNumbers
+general_settings:
+  enable_jwt_auth: true
+  litellm_jwtauth:
+    user_id_jwt_field: sub
+    issuers:
+      - issuer: https://idp.example.com/oauth2/default
+        jwks_url: https://idp.example.com/oauth2/default/v1/keys
+        audience: api://litellm
+        user_id_jwt_field: sub
+    id_jag_requesting_apps:
+      - client_id: 0oa1agentapp
+        client_secret: os.environ/AGENT_APP_CLIENT_SECRET
+      - client_id: 0oa1publicagent
+```
+
+The assertion must carry the header `typ: oauth-id-jag+jwt` and the claims `iss` (a configured issuer), `aud` (the gateway's issuer under its `PROXY_BASE_URL`, `https://litellm.example.com/mcp` or `https://litellm.example.com`; the grant is only offered when `PROXY_BASE_URL` is set, because the gateway never takes that audience from the request's `Host`), `sub` (mapped to an existing proxy user through `user_id_jwt_field` or `user_email_jwt_field`), `client_id` (the requesting app), `jti`, `exp` and `iat`. It is verified with that issuer's JWKS.
+
+```shell
+curl -X POST https://litellm.example.com/token \
+  -d grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer \
+  -d client_id=0oa1agentapp \
+  -d client_secret=$AGENT_APP_CLIENT_SECRET \
+  --data-urlencode "assertion=$ID_JAG"
+```
+
+```json
+{
+  "access_token": "LneZuxEFqvemEwK6lRzgg6BN...",
+  "token_type": "Bearer",
+  "expires_in": 86400,
+  "scope": "mcp",
+  "user_id": "user@example.com",
+  "team_id": null
+}
+```
+
+`scope` echoes the assertion's `scope`. There is no refresh token ([RFC 7521 section 4.1](https://www.rfc-editor.org/rfc/rfc7521#section-4.1)): when the credential expires, the agent asks its identity provider for a fresh assertion, which keeps the user's standing there in the loop. The credential is minted for the team the `x-litellm-team-id` header names (team id or alias), else the one of the user's teams a mapped team claim in the assertion names, else the user's only team. A user on several teams who names none gets `400 invalid_request` asking for the header.
+
+Each assertion is redeemed once. Presenting the same `jti` again returns `400` with `{"error": "invalid_grant", "error_description": "the assertion has already been redeemed"}`. A `client_id` that is not allowlisted or a wrong secret returns `401 invalid_client`. Anything wrong with the assertion itself (signature, `typ`, `iss`, `aud`, `exp`, a `client_id` claim that does not match the presenting app, a `cnf` claim since the gateway checks no proof of possession, or a `sub` the gateway does not know) returns `400 invalid_grant` with the generic description `assertion was rejected`; the reason is in the proxy log. An ID-JAG is never accepted as a bearer token on `/mcp`.
+
 ### Security rules
 
 Native proxy API grants redirect to a loopback address (`127.0.0.1`, `::1`, or `localhost`). Hosted HTTPS callbacks require a separate [hosted app grant](#hosted-app-sign-in) and exact operator allowlisting; client registration alone does not authorize one. The authorization code is single-use and bound to the client and the PKCE verifier. `lite` never follows a redirect from the registration, token, or revocation endpoint; a `3xx` answer stops the command with a message naming where it pointed, so the code and verifier or the refresh token only ever reach the origin the discovery document was checked against. The consent page is served with `Cache-Control: no-store` and `Content-Security-Policy: frame-ancestors 'none'`, so it cannot be embedded in another page. The server never picks a team on the user's behalf: the team comes from the consent page, membership is checked again at every token exchange and refresh, and a grant posted without a team while the user still has a live team to pick from is refused with `400 invalid_grant` and the description `this user belongs to a team; sign in again and pick the team for this credential`
