@@ -1,5 +1,9 @@
 # MCP ID-JAG Auth (Okta)
 
+:::tip Full guide
+The complete ID-JAG guide now lives under Authentication & Access. Start with the [ID-JAG overview](./proxy/id_jag/overview.md), then [LiteLLM as requesting app](./proxy/id_jag/requesting_app.md) for this flow, or [LiteLLM as resource app](./proxy/id_jag/resource_app.md) for agents redeeming an ID-JAG at LiteLLM's own token endpoint.
+:::
+
 ID-JAG (Identity Assertion Authorization Grant, [draft-ietf-oauth-identity-assertion-authz-grant](https://datatracker.ietf.org/doc/draft-ietf-oauth-identity-assertion-authz-grant/)) lets LiteLLM obtain an access token for an MCP server whose authorization server is different from the user's identity provider. Okta ships this as [AI agent token exchange](https://developer.okta.com/docs/guides/ai-agent-token-exchange/-/main/).
 
 Use ID-JAG when:
